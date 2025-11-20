@@ -307,7 +307,7 @@ public sealed class JobProcessor(ILogger<JobProcessor> logger)
         var archiveFileName = $"{job.Name}_{timestamp}.tar.gz";
         var tempWorkspace = Path.Combine(Path.GetTempPath(), "sftp-downloader", "archive-temp");
         Directory.CreateDirectory(tempWorkspace);
-        CleanupTempArchives(tempWorkspace);
+        CleanupTempArchives(tempWorkspace, TimeSpan.FromMinutes(30));
         var tempArchivePath = Path.Combine(tempWorkspace, archiveFileName + ".tmp");
         var finalArchivePath = Path.Combine(job.ArchiveFolder, archiveFileName);
 
@@ -346,15 +346,20 @@ public sealed class JobProcessor(ILogger<JobProcessor> logger)
         _logger.LogDebug("Job {Job}: cleared source folder {Folder} after archiving", job.Name, job.LocalTargetFolder);
     }
 
-    private void CleanupTempArchives(string tempWorkspace)
+    private void CleanupTempArchives(string tempWorkspace, TimeSpan maxAge)
     {
         try
         {
+            var threshold = DateTimeOffset.UtcNow - maxAge;
             foreach (var file in Directory.EnumerateFiles(tempWorkspace, "*.tar.gz.tmp", SearchOption.TopDirectoryOnly))
             {
                 try
                 {
-                    File.Delete(file);
+                    var lastWriteUtc = File.GetLastWriteTimeUtc(file);
+                    if (lastWriteUtc <= threshold)
+                    {
+                        File.Delete(file);
+                    }
                 }
                 catch (Exception ex)
                 {
