@@ -304,20 +304,39 @@ public sealed class JobProcessor(ILogger<JobProcessor> logger)
 
         Directory.CreateDirectory(job.ArchiveFolder);
         var timestamp = DateTimeOffset.Now.ToString("yyyyMMddHHmmss");
-        var archivePath = Path.Combine(job.ArchiveFolder, $"{job.Name}_{timestamp}.gz");
+        var archiveFileName = $"{job.Name}_{timestamp}.tar.gz";
+        var tempWorkspace = Path.Combine(Path.GetTempPath(), "sftp-downloader", "archive-temp");
+        Directory.CreateDirectory(tempWorkspace);
+        CleanupTempArchives(tempWorkspace);
+        var tempArchivePath = Path.Combine(tempWorkspace, archiveFileName + ".tmp");
+        var finalArchivePath = Path.Combine(job.ArchiveFolder, archiveFileName);
 
         try
         {
-            using var archiveStream = File.Create(archivePath);
-            using var gzipStream = new GZipStream(archiveStream, CompressionLevel.SmallestSize);
-            TarFile.CreateFromDirectory(job.LocalTargetFolder, gzipStream, includeBaseDirectory: true);
-            _logger.LogDebug("Job {Job}: archived {Source} to {Archive}", job.Name, job.LocalTargetFolder, archivePath);
+            cancellationToken.ThrowIfCancellationRequested();
+
+            if (File.Exists(tempArchivePath))
+            {
+                File.Delete(tempArchivePath);
+            }
+
+            // Create archive in a temp workspace that is not watched by other processes to avoid contention.
+            using (var archiveStream = File.Create(tempArchivePath))
+            using (var gzipStream = new GZipStream(archiveStream, CompressionLevel.SmallestSize))
+            {
+                TarFile.CreateFromDirectory(job.LocalTargetFolder, gzipStream, includeBaseDirectory: true);
+            }
+
+            cancellationToken.ThrowIfCancellationRequested();
+
+            File.Move(tempArchivePath, finalArchivePath, overwrite: false);
+            _logger.LogDebug("Job {Job}: archived {Source} to {Archive}", job.Name, job.LocalTargetFolder, finalArchivePath);
         }
         catch
         {
-            if (File.Exists(archivePath))
+            if (File.Exists(tempArchivePath))
             {
-                File.Delete(archivePath);
+                File.Delete(tempArchivePath);
             }
 
             throw;
@@ -325,6 +344,28 @@ public sealed class JobProcessor(ILogger<JobProcessor> logger)
 
         DeleteAndRecreate(job.LocalTargetFolder);
         _logger.LogDebug("Job {Job}: cleared source folder {Folder} after archiving", job.Name, job.LocalTargetFolder);
+    }
+
+    private void CleanupTempArchives(string tempWorkspace)
+    {
+        try
+        {
+            foreach (var file in Directory.EnumerateFiles(tempWorkspace, "*.tar.gz.tmp", SearchOption.TopDirectoryOnly))
+            {
+                try
+                {
+                    File.Delete(file);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(ex, "Unable to clean temp archive {TempArchive}", file);
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to scan temp archive workspace {TempWorkspace}", tempWorkspace);
+        }
     }
 
     private static void DeleteAndRecreate(string path)
