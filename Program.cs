@@ -2,6 +2,7 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 using SFTP_Downloader.Cli;
 using SFTP_Downloader.Configuration;
 using SFTP_Downloader.Jobs;
@@ -20,7 +21,11 @@ Console.CancelKeyPress += (_, eventArgs) =>
 
 var builder = Host.CreateApplicationBuilder(args);
 ConfigureSerilog(builder);
-builder.Services.Configure<AppSettings>(builder.Configuration);
+builder.Services.AddOptions<AppSettings>()
+    .Bind(builder.Configuration)
+    .ValidateDataAnnotations()
+    .ValidateOnStart();
+builder.Services.AddSingleton<IValidateOptions<AppSettings>, AppSettingsValidator>();
 builder.Services.AddSingleton(cliOptions);
 builder.Services.AddSingleton<JobProcessor>();
 builder.Services.AddSingleton<ISftpClientFactory, SftpClientFactory>();

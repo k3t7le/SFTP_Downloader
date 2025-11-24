@@ -32,7 +32,6 @@ public sealed class SftpDownloadApplication
     public Task RunAsync(CancellationToken cancellationToken)
     {
         var configuration = _settings.Value ?? throw new InvalidOperationException("Missing configuration.");
-        Validate(configuration);
 
         var jobsToRun = configuration.Jobs
             .Where(job => _cliOptions.ShouldRunJob(job.Name))
@@ -56,26 +55,5 @@ public sealed class SftpDownloadApplication
 
         JobSummaryPrinter.Print(jobResults, _logger);
         return Task.CompletedTask;
-    }
-
-    private static void Validate(AppSettings settings)
-    {
-        if (settings.Jobs.Count == 0)
-        {
-            throw new InvalidOperationException("At least one job must be configured.");
-        }
-
-        foreach (var job in settings.Jobs)
-        {
-            if (job.RemoteFolders.Count == 0)
-            {
-                throw new InvalidOperationException($"Job '{job.Name}' must declare at least one remote folder.");
-            }
-
-            if (string.IsNullOrWhiteSpace(job.LocalTargetFolder))
-            {
-                throw new InvalidOperationException($"Job '{job.Name}' is missing LocalTargetFolder.");
-            }
-        }
     }
 }
