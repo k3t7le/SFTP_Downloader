@@ -72,7 +72,7 @@ public sealed class JobProcessor(ILogger<JobProcessor> logger)
         List<ISftpFile> entries;
         try
         {
-            entries = client.ListDirectory(remoteFolder).ToList();
+            entries = client.ListDirectory(remoteFolder).Cast<ISftpFile>().ToList();
         }
         catch (Exception ex)
         {
@@ -280,18 +280,21 @@ public sealed class JobProcessor(ILogger<JobProcessor> logger)
         }
     }
 
+    private const int MaxFilesPerArchive = 1000;
+
     private void ArchiveJobOutput(JobOptions job, CancellationToken cancellationToken)
     {
         if (string.IsNullOrWhiteSpace(job.ArchiveFolder))
-        {
             return;
-        }
 
         cancellationToken.ThrowIfCancellationRequested();
 
         if (!Directory.Exists(job.LocalTargetFolder))
         {
-            _logger.LogWarning("Job {Job}: local folder {Folder} does not exist; skipping archive", job.Name, job.LocalTargetFolder);
+            _logger.LogWarning(
+                "Job {Job}: local folder {Folder} does not exist; skipping archive",
+                job.Name, job.LocalTargetFolder
+            );
             return;
         }
 
@@ -303,47 +306,105 @@ public sealed class JobProcessor(ILogger<JobProcessor> logger)
         }
 
         Directory.CreateDirectory(job.ArchiveFolder);
+
         var timestamp = DateTimeOffset.Now.ToString("yyyyMMddHHmmss");
-        var archiveFileName = $"{job.Name}_{timestamp}.tar.gz";
+
         var tempWorkspace = Path.Combine(Path.GetTempPath(), "sftp-downloader", "archive-temp");
         Directory.CreateDirectory(tempWorkspace);
         CleanupTempArchives(tempWorkspace, TimeSpan.FromMinutes(30));
-        var tempArchivePath = Path.Combine(tempWorkspace, archiveFileName + ".tmp");
-        var finalArchivePath = Path.Combine(job.ArchiveFolder, archiveFileName);
+
+        // 하위 디렉터리까지 포함한 모든 파일
+        var allFiles = Directory.GetFiles(job.LocalTargetFolder, "*", SearchOption.AllDirectories);
+        if (allFiles.Length == 0)
+        {
+            _logger.LogDebug("Job {Job}: no files to archive in {Folder}", job.Name, job.LocalTargetFolder);
+            return;
+        }
+
+        int totalFiles = allFiles.Length;
+        int totalBatches = (int)Math.Ceiling(totalFiles / (double)MaxFilesPerArchive);
 
         try
         {
-            cancellationToken.ThrowIfCancellationRequested();
-
-            if (File.Exists(tempArchivePath))
+            for (int batchIndex = 0; batchIndex < totalBatches; batchIndex++)
             {
-                File.Delete(tempArchivePath);
+                cancellationToken.ThrowIfCancellationRequested();
+
+                int skip = batchIndex * MaxFilesPerArchive;
+                var batchFiles = allFiles
+                    .Skip(skip)
+                    .Take(MaxFilesPerArchive)
+                    .ToArray();
+
+                // 배치가 1개뿐이면 예전처럼 suffix 없이,
+                // 여러 개면 _001, _002... 붙이기
+                string archiveFileName =
+                    totalBatches == 1
+                        ? $"{job.Name}_{timestamp}.zip"
+                        : $"{job.Name}_{timestamp}_{(batchIndex + 1):D3}.zip";
+
+                var tempArchivePath = Path.Combine(tempWorkspace, archiveFileName + ".tmp");
+                var finalArchivePath = Path.Combine(job.ArchiveFolder, archiveFileName);
+
+                if (File.Exists(tempArchivePath))
+                    File.Delete(tempArchivePath);
+
+                // ZIP 생성 (배치 단위)
+                using (var zip = ZipFile.Open(tempArchivePath, ZipArchiveMode.Create))
+                {
+                    var compressionLevel = CompressionLevel.Fastest; // 속도 우선
+
+                    foreach (var file in batchFiles)
+                    {
+                        cancellationToken.ThrowIfCancellationRequested();
+
+                        // ZIP 내부 경로: 기준 폴더 기준 상대경로 유지
+                        var relativePath = Path.GetRelativePath(job.LocalTargetFolder, file)
+                            .Replace('\\', '/');
+
+                        var entry = zip.CreateEntry(relativePath, compressionLevel);
+
+                        using (var entryStream = entry.Open())
+                        using (var inputStream = File.OpenRead(file))
+                        {
+                            inputStream.CopyTo(entryStream);
+                        }
+                    }
+                }
+
+                cancellationToken.ThrowIfCancellationRequested();
+
+                File.Move(tempArchivePath, finalArchivePath, overwrite: false);
+
+                _logger.LogDebug(
+                    "Job {Job}: archived batch {Batch}/{TotalBatches} ({FileCount} files) to {Archive}",
+                    job.Name,
+                    batchIndex + 1,
+                    totalBatches,
+                    batchFiles.Length,
+                    finalArchivePath
+                );
             }
-
-            // Create archive in a temp workspace that is not watched by other processes to avoid contention.
-            using (var archiveStream = File.Create(tempArchivePath))
-            using (var gzipStream = new GZipStream(archiveStream, CompressionLevel.SmallestSize))
-            {
-                TarFile.CreateFromDirectory(job.LocalTargetFolder, gzipStream, includeBaseDirectory: true);
-            }
-
-            cancellationToken.ThrowIfCancellationRequested();
-
-            File.Move(tempArchivePath, finalArchivePath, overwrite: false);
-            _logger.LogDebug("Job {Job}: archived {Source} to {Archive}", job.Name, job.LocalTargetFolder, finalArchivePath);
         }
         catch
         {
-            if (File.Exists(tempArchivePath))
+            // 현재 만드는 중이던 temp만 정리 (이미 만든 zip들은 그대로 둠)
+            // tempWorkspace 전체를 지우고 싶으면 여기서 Directory.EnumerateFiles(tempWorkspace) 돌려서 *.tmp 삭제해도 됨.
+            foreach (var tmp in Directory.EnumerateFiles(tempWorkspace, "*.tmp"))
             {
-                File.Delete(tempArchivePath);
+                try { File.Delete(tmp); } catch { /* 무시 */ }
             }
 
             throw;
         }
 
+        // 원본 폴더 비우기
         DeleteAndRecreate(job.LocalTargetFolder);
-        _logger.LogDebug("Job {Job}: cleared source folder {Folder} after archiving", job.Name, job.LocalTargetFolder);
+
+        _logger.LogDebug(
+            "Job {Job}: cleared source folder {Folder} after archiving",
+            job.Name, job.LocalTargetFolder
+        );
     }
 
     private void CleanupTempArchives(string tempWorkspace, TimeSpan maxAge)
@@ -351,7 +412,7 @@ public sealed class JobProcessor(ILogger<JobProcessor> logger)
         try
         {
             var threshold = DateTimeOffset.UtcNow - maxAge;
-            foreach (var file in Directory.EnumerateFiles(tempWorkspace, "*.tar.gz.tmp", SearchOption.TopDirectoryOnly))
+            foreach (var file in Directory.EnumerateFiles(tempWorkspace, "*.tmp", SearchOption.TopDirectoryOnly))
             {
                 try
                 {
