@@ -7,7 +7,7 @@ Reliable multi-job downloader that pulls files from one or more SFTP folders, st
 - **Job-based configuration** — Each job maps remote folders to its own local target and optional archive path.
 - **Atomic downloads** — Files arrive as `<name>.part` until the full download finishes, then promote to the final name.
 - **Per-file isolation** — One file failure doesn’t stop the rest; progress and failures are summarized at the end.
-- **Archive staging** — Archives are created as `tar.gz` in a temp workspace (`%TEMP%/sftp-downloader/archive-temp`), then moved atomically to `ArchiveFolder`; stale temp files are cleaned at startup.
+- **Archive staging** — Archives are created as `tar.gz` in a temp workspace (`<TempWorkspaceRoot>/archive-temp`, default `%TEMP%/sftp-downloader/archive-temp`), then moved atomically to `ArchiveFolder`; stale temp files are cleaned at startup.
 - **Logging & summary** — Throttled console progress, rolling file logs with full debug detail, and an ASCII run summary (`RUN-SUMMARY …`) for quick greps.
 
 ## Quick Start
@@ -34,6 +34,7 @@ Reliable multi-job downloader that pulls files from one or more SFTP folders, st
 ## Configuration (appsettings.json)
 
 - `Sftp`: `Host`, `Port`, `Username`, and either `Password` or `PrivateKeyPath`/`PrivateKeyPassphrase`.
+- `TempWorkspaceRoot`: Optional temp root for archive staging (defaults to `%TEMP%/sftp-downloader`).
 - `Jobs[]`:
   - `Name` — Job name.
   - `RemoteFolders` — Array of remote folders.

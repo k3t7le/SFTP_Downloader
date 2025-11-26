@@ -8,6 +8,8 @@ public sealed class AppSettings
     [Required]
     public required SftpOptions Sftp { get; init; }
 
+    public string TempWorkspaceRoot { get; init; } = Path.Combine(Path.GetTempPath(), "sftp-downloader");
+
     [MinLength(1)]
     public List<JobOptions> Jobs { get; init; } = new();
 

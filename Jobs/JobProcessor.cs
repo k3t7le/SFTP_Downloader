@@ -2,19 +2,29 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Formats.Tar;
+using System.IO;
 using System.IO.Compression;
 using System.IO.Enumeration;
 using System.Linq;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 using Renci.SshNet;
 using Renci.SshNet.Sftp;
 using SFTP_Downloader.Configuration;
 
 namespace SFTP_Downloader.Jobs;
 
-public sealed class JobProcessor(ILogger<JobProcessor> logger)
+public sealed class JobProcessor
 {
-    private readonly ILogger<JobProcessor> _logger = logger;
+    private readonly ILogger<JobProcessor> _logger;
+    private readonly string _tempWorkspaceRoot;
+
+    public JobProcessor(ILogger<JobProcessor> logger, IOptions<AppSettings> settings)
+    {
+        _logger = logger;
+        var appSettings = settings.Value ?? throw new InvalidOperationException("Missing configuration.");
+        _tempWorkspaceRoot = ResolveTempWorkspaceRoot(appSettings.TempWorkspaceRoot);
+    }
 
     public JobRunResult ProcessJob(SftpClient client, JobOptions job, CancellationToken cancellationToken)
     {
@@ -309,11 +319,11 @@ public sealed class JobProcessor(ILogger<JobProcessor> logger)
 
         var timestamp = DateTimeOffset.Now.ToString("yyyyMMddHHmmss");
 
-        var tempWorkspace = Path.Combine(Path.GetTempPath(), "sftp-downloader", "archive-temp");
+        var tempWorkspace = Path.Combine(_tempWorkspaceRoot, "archive-temp");
         Directory.CreateDirectory(tempWorkspace);
         CleanupTempArchives(tempWorkspace, TimeSpan.FromMinutes(30));
 
-        // ÇÏÀ§ µğ·ºÅÍ¸®±îÁö Æ÷ÇÔÇÑ ¸ğµç ÆÄÀÏ
+        // í•˜ìœ„ ë””ë ‰í„°ë¦¬ê¹Œì§€ í¬í•¨í•œ ëª¨ë“  íŒŒì¼
         var allFiles = Directory.GetFiles(job.LocalTargetFolder, "*", SearchOption.AllDirectories);
         if (allFiles.Length == 0)
         {
@@ -336,8 +346,8 @@ public sealed class JobProcessor(ILogger<JobProcessor> logger)
                     .Take(MaxFilesPerArchive)
                     .ToArray();
 
-                // ¹èÄ¡°¡ 1°³»ÓÀÌ¸é ¿¹ÀüÃ³·³ suffix ¾øÀÌ,
-                // ¿©·¯ °³¸é _001, _002... ºÙÀÌ±â
+                // ë°°ì¹˜ê°€ 1ê°œë¿ì´ë©´ ì˜ˆì „ì²˜ëŸ¼ suffix ì—†ì´,
+                // ì—¬ëŸ¬ ê°œë©´ _001, _002... ë¶™ì´ê¸°
                 string archiveFileName =
                     totalBatches == 1
                         ? $"{job.Name}_{timestamp}.zip"
@@ -349,16 +359,16 @@ public sealed class JobProcessor(ILogger<JobProcessor> logger)
                 if (File.Exists(tempArchivePath))
                     File.Delete(tempArchivePath);
 
-                // ZIP »ı¼º (¹èÄ¡ ´ÜÀ§)
+                // ZIP ìƒì„± (ë°°ì¹˜ ë‹¨ìœ„)
                 using (var zip = ZipFile.Open(tempArchivePath, ZipArchiveMode.Create))
                 {
-                    var compressionLevel = CompressionLevel.Fastest; // ¼Óµµ ¿ì¼±
+                    var compressionLevel = CompressionLevel.Fastest; // ì†ë„ ìš°ì„ 
 
                     foreach (var file in batchFiles)
                     {
                         cancellationToken.ThrowIfCancellationRequested();
 
-                        // ZIP ³»ºÎ °æ·Î: ±âÁØ Æú´õ ±âÁØ »ó´ë°æ·Î À¯Áö
+                        // ZIP ë‚´ë¶€ ê²½ë¡œ: ê¸°ì¤€ í´ë” ê¸°ì¤€ ìƒëŒ€ê²½ë¡œ ìœ ì§€
                         var relativePath = Path.GetRelativePath(job.LocalTargetFolder, file)
                             .Replace('\\', '/');
 
@@ -388,17 +398,17 @@ public sealed class JobProcessor(ILogger<JobProcessor> logger)
         }
         catch
         {
-            // ÇöÀç ¸¸µå´Â ÁßÀÌ´ø temp¸¸ Á¤¸® (ÀÌ¹Ì ¸¸µç zipµéÀº ±×´ë·Î µÒ)
-            // tempWorkspace ÀüÃ¼¸¦ Áö¿ì°í ½ÍÀ¸¸é ¿©±â¼­ Directory.EnumerateFiles(tempWorkspace) µ¹·Á¼­ *.tmp »èÁ¦ÇØµµ µÊ.
+            // í˜„ì¬ ë§Œë“œëŠ” ì¤‘ì´ë˜ tempë§Œ ì •ë¦¬ (ì´ë¯¸ ë§Œë“  zipë“¤ì€ ê·¸ëŒ€ë¡œ ë‘ )
+            // tempWorkspace ì „ì²´ë¥¼ ì§€ìš°ê³  ì‹¶ìœ¼ë©´ ì—¬ê¸°ì„œ Directory.EnumerateFiles(tempWorkspace) ëŒë ¤ì„œ *.tmp ì‚­ì œí•´ë„ ë¨.
             foreach (var tmp in Directory.EnumerateFiles(tempWorkspace, "*.tmp"))
             {
-                try { File.Delete(tmp); } catch { /* ¹«½Ã */ }
+                try { File.Delete(tmp); } catch { /* ë¬´ì‹œ */ }
             }
 
             throw;
         }
 
-        // ¿øº» Æú´õ ºñ¿ì±â
+        // ì›ë³¸ í´ë” ë¹„ìš°ê¸°
         DeleteAndRecreate(job.LocalTargetFolder);
 
         _logger.LogDebug(
@@ -455,5 +465,14 @@ public sealed class JobProcessor(ILogger<JobProcessor> logger)
         }
 
         return normalizedFolder + "/" + normalizedFile;
+    }
+
+    private static string ResolveTempWorkspaceRoot(string? configuredPath)
+    {
+        var basePath = string.IsNullOrWhiteSpace(configuredPath)
+            ? Path.Combine(Path.GetTempPath(), "sftp-downloader")
+            : configuredPath;
+
+        return Path.GetFullPath(basePath);
     }
 }

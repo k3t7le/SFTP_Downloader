@@ -7,7 +7,7 @@
 - **잡 기반 설정** — 잡마다 원격 폴더와 독립된 로컬 대상/아카이브 경로를 매핑합니다.
 - **원자적 다운로드** — `<이름>.part`로 받은 후 완료 시 최종 이름으로 승격합니다.
 - **파일 단위 격리** — 한 파일 실패가 다른 파일에 영향을 주지 않고 요약에 집계됩니다.
-- **아카이브 스테이징** — `%TEMP%/sftp-downloader/archive-temp`에서 `tar.gz`로 만든 뒤 `ArchiveFolder`로 원자적 이동, 시작 시 남은 `.tmp`는 자동 정리됩니다.
+- **아카이브 스테이징** — `TempWorkspaceRoot`(기본 `%TEMP%/sftp-downloader`) 하위 `archive-temp`에서 `tar.gz` 생성 후 `ArchiveFolder`로 원자적 이동, 시작 시 남은 `.tmp`는 자동 정리됩니다.
 - **로그/요약** — 제한된 콘솔 진행률, 디버그까지 담는 롤링 로그, `RUN-SUMMARY …` 한 줄로 grep 가능한 실행 요약을 제공합니다.
 
 ## 빠른 시작
@@ -34,6 +34,7 @@
 ## 설정 (`appsettings.json`)
 
 - `Sftp`: `Host`, `Port`, `Username`, `Password` 또는 `PrivateKeyPath`/`PrivateKeyPassphrase`
+- `TempWorkspaceRoot`: 아카이브 스테이징용 임시 루트(기본 `%TEMP%/sftp-downloader`)
 - `Jobs[]`:
   - `Name` — 잡 이름
   - `RemoteFolders` — 원격 폴더 배열

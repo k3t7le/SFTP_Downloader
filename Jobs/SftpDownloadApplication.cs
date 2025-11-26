@@ -65,6 +65,11 @@ public sealed class SftpDownloadApplication
             throw new InvalidOperationException("At least one job must be configured.");
         }
 
+        if (string.IsNullOrWhiteSpace(settings.TempWorkspaceRoot))
+        {
+            throw new InvalidOperationException("TempWorkspaceRoot must be configured.");
+        }
+
         foreach (var job in settings.Jobs)
         {
             if (job.RemoteFolders.Count == 0)
