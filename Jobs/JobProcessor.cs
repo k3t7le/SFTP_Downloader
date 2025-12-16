@@ -17,16 +17,18 @@ namespace SFTP_Downloader.Jobs;
 public sealed class JobProcessor
 {
     private readonly ILogger<JobProcessor> _logger;
+    private readonly JobStateStore _stateStore;
     private readonly string _tempWorkspaceRoot;
 
-    public JobProcessor(ILogger<JobProcessor> logger, IOptions<AppSettings> settings)
+    public JobProcessor(ILogger<JobProcessor> logger, IOptions<AppSettings> settings, JobStateStore stateStore)
     {
         _logger = logger;
+        _stateStore = stateStore;
         var appSettings = settings.Value ?? throw new InvalidOperationException("Missing configuration.");
         _tempWorkspaceRoot = ResolveTempWorkspaceRoot(appSettings.TempWorkspaceRoot);
     }
 
-    public JobRunResult ProcessJob(SftpClient client, JobOptions job, CancellationToken cancellationToken)
+    public JobRunResult ProcessJob(SftpClient client, JobOptions job, CancellationToken cancellationToken) 
     {
         var jobResult = new JobRunResult(job.Name);
         var jobStopwatch = Stopwatch.StartNew();
@@ -99,31 +101,36 @@ public sealed class JobProcessor
             .Where(entry => IsCandidate(job, entry))
             .ToList();
 
+        var lastProcessedState = _stateStore.GetLastProcessed(job.Name, remoteFolder);
+        var filtered = OrderByTimestamp(FilterByLastProcessed(candidates, lastProcessedState));
+
         _logger.LogDebug(
-            "Job {Job}: {Folder} has {CandidateCount} candidate files matching {Pattern}",
+            "Job {Job}: {Folder} has {CandidateCount} candidate files matching {Pattern} (last processed {LastProcessed})",
             job.Name,
             remoteFolder,
-            candidates.Count,
-            string.IsNullOrWhiteSpace(job.SearchPattern) ? "*" : job.SearchPattern);
+            filtered.Count,
+            string.IsNullOrWhiteSpace(job.SearchPattern) ? "*" : job.SearchPattern,
+            lastProcessedState.LastProcessedUtc?.ToString("u") ?? "n/a");
 
-        folderResult.TotalCandidates = candidates.Count;
-        var progressReporter = new ConsoleProgressReporter(remoteFolder, candidates.Count);
+        folderResult.TotalCandidates = filtered.Count;
+        var progressReporter = new ConsoleProgressReporter(remoteFolder, filtered.Count);
 
-        if (candidates.Count == 0)
+        if (filtered.Count == 0)
         {
             folderStopwatch.Stop();
             folderResult.Duration = folderStopwatch.Elapsed;
             return folderResult;
         }
 
-        for (var index = 0; index < candidates.Count; index++)
+        for (var index = 0; index < filtered.Count; index++)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            var entry = candidates[index];
+            var entry = filtered[index];
 
             try
             {
-                DownloadFile(client, job, remoteFolder, entry, index, candidates.Count);
+                var lastWriteUtc = DownloadFile(client, job, remoteFolder, entry, index, filtered.Count);
+                _stateStore.RecordProcessed(job.Name, remoteFolder, lastWriteUtc, entry.Name);
                 folderResult.SuccessCount++;
             }
             catch (Exception ex)
@@ -157,7 +164,7 @@ public sealed class JobProcessor
         return FileSystemName.MatchesSimpleExpression(pattern, entry.Name, ignoreCase: true);
     }
 
-    private void DownloadFile(
+    private DateTimeOffset DownloadFile(
         SftpClient client,
         JobOptions job,
         string remoteFolder,
@@ -169,11 +176,12 @@ public sealed class JobProcessor
         var localFilePath = Path.Combine(job.LocalTargetFolder, entry.Name);
         var tempFilePath = localFilePath + ".part";
         var progress = FormatProgress(fileIndex, totalCount);
+        var remoteLastWriteUtc = GetLastWriteTimeUtc(entry);
 
         if (File.Exists(localFilePath))
         {
             _logger.LogDebug("Job {Job}: {Local} already exists; skipping {Remote}", job.Name, localFilePath, entry.FullName);
-            return;
+            return remoteLastWriteUtc;
         }
 
         if (File.Exists(tempFilePath))
@@ -224,6 +232,8 @@ public sealed class JobProcessor
                 progress,
                 remotePath);
         }
+
+        return remoteLastWriteUtc;
     }
 
     private static string FormatProgress(int fileIndex, int totalCount)
@@ -465,6 +475,50 @@ public sealed class JobProcessor
         }
 
         return normalizedFolder + "/" + normalizedFile;
+    }
+
+    private static DateTimeOffset GetLastWriteTimeUtc(ISftpFile entry)
+    {
+        var lastWriteTime = entry.Attributes?.LastWriteTimeUtc ?? DateTime.MinValue;
+        if (lastWriteTime.Kind == DateTimeKind.Unspecified)
+        {
+            lastWriteTime = DateTime.SpecifyKind(lastWriteTime, DateTimeKind.Utc);
+        }
+
+        return new DateTimeOffset(lastWriteTime.ToUniversalTime());
+    }
+
+    private static List<ISftpFile> FilterByLastProcessed(IEnumerable<ISftpFile> candidates, FolderStateSnapshot lastProcessed)
+    {
+        if (lastProcessed.LastProcessedUtc is null)
+        {
+            return candidates.ToList();
+        }
+
+        var threshold = lastProcessed.LastProcessedUtc.Value.AddSeconds(-1);
+        var lastTimestamp = lastProcessed.LastProcessedUtc.Value;
+        var processedNames = new HashSet<string>(lastProcessed.NamesAtLastTimestamp ?? Array.Empty<string>(), StringComparer.OrdinalIgnoreCase);
+
+        return candidates
+            .Where(entry =>
+            {
+                var entryTimestamp = GetLastWriteTimeUtc(entry);
+                if (entryTimestamp <= lastTimestamp && processedNames.Contains(entry.Name))
+                {
+                    return false;
+                }
+
+                return entryTimestamp > threshold;
+            })
+            .ToList();
+    }
+
+    private static List<ISftpFile> OrderByTimestamp(IEnumerable<ISftpFile> candidates)
+    {
+        return candidates
+            .OrderBy(GetLastWriteTimeUtc)
+            .ThenBy(entry => entry.FullName, StringComparer.OrdinalIgnoreCase)
+            .ToList();
     }
 
     private static string ResolveTempWorkspaceRoot(string? configuredPath)

@@ -7,6 +7,7 @@ Reliable multi-job downloader that pulls files from one or more SFTP folders, st
 - **Job-based configuration** — Each job maps remote folders to its own local target and optional archive path.
 - **Atomic downloads** — Files arrive as `<name>.part` until the full download finishes, then promote to the final name.
 - **Per-file isolation** — One file failure doesn’t stop the rest; progress and failures are summarized at the end.
+- **Per-folder last-processed tracking** — Persists the last successful `LastWriteTimeUtc` per job/folder (plus the filenames at that exact second) in `TempWorkspaceRoot/state/job-state.json` and only pulls files newer than that (with a 1-second safety cushion, but previously processed names at the same second are skipped).
 - **Archive staging** — Archives are created as `tar.gz` in a temp workspace (`<TempWorkspaceRoot>/archive-temp`, default `%TEMP%/sftp-downloader/archive-temp`), then moved atomically to `ArchiveFolder`; stale temp files are cleaned at startup.
 - **Logging & summary** — Throttled console progress, rolling file logs with full debug detail, and an ASCII run summary (`RUN-SUMMARY …`) for quick greps.
 

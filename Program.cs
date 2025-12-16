@@ -24,6 +24,7 @@ builder.Services.Configure<AppSettings>(builder.Configuration);
 builder.Services.AddSingleton(cliOptions);
 builder.Services.AddSingleton<JobProcessor>();
 builder.Services.AddSingleton<ISftpClientFactory, SftpClientFactory>();
+builder.Services.AddSingleton<JobStateStore>();
 builder.Services.AddSingleton<SftpDownloadApplication>();
 
 using var host = builder.Build();
@@ -35,16 +36,18 @@ try
 {
     var app = services.GetRequiredService<SftpDownloadApplication>();
     await app.RunAsync(cts.Token);
+    logger.LogInformation("FINAL-STATUS status=SUCCESS");
     return 0;
 }
 catch (OperationCanceledException)
 {
     logger.LogWarning("Cancellation requested. Exiting gracefully.");
+    logger.LogInformation("FINAL-STATUS status=EXIT");
     return 2;
 }
 catch (Exception ex)
 {
-    logger.LogError(ex, "Unhandled exception while running downloader.");
+    logger.LogError(ex, "FINAL-STATUS status=FAIL reason=" + ex.Message);
     return 1;
 }
 finally

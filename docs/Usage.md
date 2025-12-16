@@ -74,3 +74,9 @@ dotnet run --project SFTP_Downloader.csproj -- --job AGING
 3. Check for leftover `.part` files. They should only exist briefly; lingering parts usually indicate the machine stopped mid-transfer.
 
 That’s it—rerun the command whenever you need to poll the SFTP server again.
+
+## Note: Last-processed timestamp filter
+
+- The downloader saves the last successful `LastWriteTimeUtc` per job/remote folder **and the filenames processed at that exact second** into `TempWorkspaceRoot/state/job-state.json`.
+- Next runs include only files newer than the stored time (with ~1 second of safety margin). If a file shares the same timestamp as the last batch but its name was already processed, it is skipped to avoid duplicates.
+- This prevents re-downloading old files that remain on the server even if `DeleteRemoteAfterSuccess` is `false` or the local folder is cleared after archiving.

@@ -72,3 +72,9 @@ dotnet run --project SFTP_Downloader.csproj -- --job AGING
 3. `.part` 임시 파일이 오래 남아 있지 않은지 점검합니다. 계속 남아 있다면 중간에 프로그램이 중단된 것이므로 재실행합니다.
 
 이상의 단계를 통해 안전하게 SFTP 서버의 파일을 수집할 수 있습니다.
+
+## 참고: 마지막 처리 시각 기반 필터
+
+- 잡/원격 폴더별로 마지막으로 성공적으로 처리된 파일의 `LastWriteTimeUtc`와 **그 시각에 처리한 파일명 목록**을 `TempWorkspaceRoot/state/job-state.json`에 저장합니다.
+- 다음 실행 시에는 저장된 시각보다 (약 1초 이상) 더 새로운 파일만 포함하고, 같은 시각이라도 이미 처리한 파일명은 건너뜁니다.
+- `DeleteRemoteAfterSuccess`가 false이거나 아카이브 후 로컬 폴더를 비워도, 서버에 남아 있는 이전 파일을 중복 다운로드하지 않게 설계되었습니다.
